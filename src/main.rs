@@ -6,14 +6,21 @@ extern crate opengl_graphics;
 use std::f64::consts::PI;
 
 use piston::window::WindowSettings;
-use piston::input::{RenderArgs, RenderEvent};
+use piston::input::{RenderArgs, RenderEvent, UpdateArgs, UpdateEvent};
 use piston::event_loop::*;
 use graphics::*;
 use graphics::types::*;
 use glutin_window::GlutinWindow as Window;
 use opengl_graphics::*;
 
-const EXERCISE: u8 = 2;
+type Triangle = [[f64; 2]; 3];
+
+const EXERCISE: u8 = 5;
+const ITERATIONS: u8 = 4;
+
+const START: [f64; 2] = [100.0, 450.0];
+const SHAPE_SIZE: f64 = 500.0;
+
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
@@ -21,6 +28,8 @@ struct App {
 	gl: GlGraphics,
 	context: Context,
 	koch_lines: Vec<KochLine>,
+	line_index: usize,
+	triangles: Vec<Triangle>,
 }
 
 impl App {
@@ -34,7 +43,7 @@ impl App {
 		}
 	}
 
-	// Exercise 2
+	// Exercise 2 & 3
 	fn generate_koch_lines(&mut self) {
 		let mut new_lines: Vec<KochLine> = Vec::new();
 		for line in &self.koch_lines {
@@ -59,46 +68,68 @@ impl App {
 		self.koch_lines = new_lines;
 	}
 
-	fn draw_koch_line(&mut self, start: Vec2d, rotation: f64) {
-		let transform: math::Matrix2d = self.context.transform;
-		for (i, line) in self.koch_lines.iter().enumerate() {
+	fn draw_koch_line(&mut self, start: Vec2d, rotation: f64, max_index: usize) {
+		let transform: math::Matrix2d = math::rotate_radians(rotation);
+
+		for i in 0..max_index {
 			let mut color: Color = BLACK;
 			if EXERCISE == 3 {
 				let index_ratio = i as f32 / self.koch_lines.len() as f32;
-				color = [0.8, index_ratio, index_ratio, 1.0];
+				color = Color::hue_deg([1.0, 0.0, 0.0, 1.0], index_ratio * 360.0);
 			}
-			line_from_to(
-				color,
-				1.0,
-				math::add(start, line.start),
-				math::add(start, line.end),
-				transform,
-				&mut self.gl
-			);
+			let from: Vec2d = math::add(start, math::transform_vec(transform, self.koch_lines[i].start));
+			let to: Vec2d = math::add(start, math::transform_vec(transform, self.koch_lines[i].end));
+			
+			line_from_to(color, 1.0, from, to, self.context.transform, &mut self.gl);
 		}
 	}
 
-	fn koch_snowflake(&mut self) {
-		self.draw_koch_line([50.0, 50.0], PI);
+	fn koch_snowflake(&mut self, max_index: usize) {
+		self.draw_koch_line(START, 0.0, max_index); // Bottom
+		self.draw_koch_line([START[0] + SHAPE_SIZE, START[1]], -PI * 2.0 / 3.0, max_index); // Right
+		self.draw_koch_line([START[0] + SHAPE_SIZE / 2.0, START[1] - (PI / 3.0).tan() * SHAPE_SIZE / 2.0], PI * 2.0 / 3.0, max_index); // Left
+	}
+
+	// Exercise 5
+	fn sierpinski_triangle(&mut self) {
+		for triangle in &self.triangles {
+			polygon(BLACK, triangle, self.context.transform, &mut self.gl);
+		}
+	}
+	
+	fn generate_sierpinski(&mut self, triangle: Triangle, iterations: u8) {
+		if iterations >= ITERATIONS {
+			self.triangles.push(triangle);
+			return;
+		}
+		let bottom_left: Triangle = [triangle[0], [triangle[2][0], triangle[0][1]], lerp(triangle[0], triangle[2], 1.0 / 2.0)];
+		let right_left: Triangle = [[triangle[2][0], triangle[0][1]], triangle[1], lerp(triangle[1], triangle[2], 1.0 / 2.0)];
+		let top: Triangle = [lerp(triangle[0], triangle[2], 1.0 / 2.0), lerp(triangle[1], triangle[2], 1.0 / 2.0), triangle[2]];
+
+		self.generate_sierpinski(bottom_left, iterations + 1);
+		self.generate_sierpinski(right_left, iterations + 1);
+		self.generate_sierpinski(top, iterations + 1);
 	}
 
 	fn render(&mut self, args: &RenderArgs) {
 		let center = (args.window_size[0] / 2.0, args.window_size[1] / 2.0);
-		// let square = rectangle::centered_square(screen_width / 2.0, screen_height / 2.0, 50.0);
 
 		self.context = self.gl.draw_begin(args.viewport());
-
 		clear(WHITE, &mut self.gl);
-
-		// rectangle(BLACK, square, self.context.transform, &mut self.gl);
 		
 		match EXERCISE {
 			1 => self.spiral_pattern(center.0, 0.0, 75.0, 0.0),
-			2 | 3 => self.koch_snowflake(),
+			2 => self.koch_snowflake(self.koch_lines.len()),
+			3 => self.koch_snowflake(self.line_index),
+			5 => self.sierpinski_triangle(),
 			_ => (),
 		}
 
 		self.gl.draw_end();
+	}
+
+	fn update(&mut self, _args: &UpdateArgs) {
+		self.line_index = self.koch_lines.len().min(self.line_index + 1);
 	}
 }
 
@@ -129,26 +160,35 @@ fn main() {
 	// Create OpenGL back-end
 	let gl = GlGraphics::new(opengl);
 
-	let base_koch_line = KochLine { start: [0.0, 0.0], end: [300.0, 0.0] };
+	let base_koch_line = KochLine { start: [0.0, 0.0], end: [SHAPE_SIZE, 0.0] };
 	
 	let mut app = App {
 		gl,
 		context: Context::new(),
 		koch_lines: vec![base_koch_line],
+		line_index: 0,
+		triangles: Vec::new(),
 	};
 
-	if EXERCISE == 2 || EXERCISE == 3 {
-		const ITERATIONS: u8 = 3;
-		for _i in 0..ITERATIONS {
-			app.generate_koch_lines();
-		}
+	// Generate fractals
+	match EXERCISE {
+		2 | 3 => {
+			for _i in 0..ITERATIONS {
+				app.generate_koch_lines();
+			}
+		},
+		5 => app.generate_sierpinski([START, [START[0] + SHAPE_SIZE, START[1]], [START[0] + SHAPE_SIZE / 2.0, START[1] - (PI / 3.0).tan() * SHAPE_SIZE / 2.0]], 0),
+		_ => (),
 	}
 	
-	let mut events = Events::new(EventSettings::new());
+	let mut events = Events::new(EventSettings::new().max_fps(15));
 	// Event loop
 	while let Some(e) = events.next(&mut window) {
 		if let Some(args) = e.render_args() {
 			app.render(&args);
+		}
+		if let Some(args) = e.update_args() {
+			app.update(&args);
 		}
 	}
 }
