@@ -2,6 +2,7 @@ extern crate piston;
 extern crate graphics;
 extern crate glutin_window;
 extern crate opengl_graphics;
+extern crate noise;
 
 use std::f64::consts::PI;
 
@@ -12,10 +13,17 @@ use graphics::*;
 use graphics::types::*;
 use glutin_window::GlutinWindow as Window;
 use opengl_graphics::*;
+use noise::{Perlin, RotatePoint, NoiseFn};
 
 type Triangle = [[f64; 2]; 3];
 
-const EXERCISE: u8 = 5;
+/*
+1: Spiral
+2: Koch snowflake (3 is animated)
+5: Sierpinski triangle
+6,7: Tree (10 blows in the wind)
+*/
+const EXERCISE: u8 = 10;
 const ITERATIONS: u8 = 4;
 
 const START: [f64; 2] = [100.0, 450.0];
@@ -30,6 +38,8 @@ struct App {
 	koch_lines: Vec<KochLine>,
 	line_index: usize,
 	triangles: Vec<Triangle>,
+	branches: Vec<Branch>,
+	rotate_noise: RotatePoint<Perlin>,
 }
 
 impl App {
@@ -111,6 +121,47 @@ impl App {
 		self.generate_sierpinski(top, iterations + 1);
 	}
 
+	// Exercise 6, 7 & 10
+	fn tree(&mut self) {
+		let mut delta_pos = [0.0, 0.0];
+		for branch in &mut self.branches {
+			let mut delta_angle = 0.0;
+			let direction = math::sub(branch.end, branch.start);
+			if EXERCISE == 10 {
+				delta_angle = self.rotate_noise.get(direction);
+			}
+
+			let rotation: Matrix2d = math::rotate_radians(delta_angle * PI / 180.0);
+			let new_direction = math::transform_vec(rotation, direction);
+			branch.end = math::add(branch.start, new_direction);
+			delta_pos = math::add(delta_pos, math::sub(new_direction, direction));
+
+			line_from_to(BLACK, branch.thickness, 
+				math::add(branch.start, delta_pos), math::add(branch.end, delta_pos), 
+				self.context.transform, &mut self.gl
+			);
+		}
+	}
+
+	fn generate_tree(&mut self, branch: Line, length: f64, thickness: f64) {
+		let end: Vec2d = math::add(branch.start, math::mul_scalar(branch.direction, length));
+		self.branches.push(Branch { start: branch.start, end, thickness });
+		
+		if length > 2.0 {
+			let angle = PI / 6.0;
+
+			let rotation_left: Matrix2d = math::rotate_radians(-angle);
+			let left_direction = math::transform_vec(rotation_left, branch.direction);
+			
+			let rotation_right: Matrix2d = math::rotate_radians(angle);
+			let right_direction = math::transform_vec(rotation_right, branch.direction);
+			
+			// Branch to both left and right
+			self.generate_tree(Line {start: end, direction: left_direction}, length * 0.66, thickness * 0.8);
+			self.generate_tree(Line {start: end, direction: right_direction}, length * 0.66, thickness * 0.8);
+		}
+	}
+
 	fn render(&mut self, args: &RenderArgs) {
 		let center = (args.window_size[0] / 2.0, args.window_size[1] / 2.0);
 
@@ -122,6 +173,7 @@ impl App {
 			2 => self.koch_snowflake(self.koch_lines.len()),
 			3 => self.koch_snowflake(self.line_index),
 			5 => self.sierpinski_triangle(),
+			6 | 10 => self.tree(),
 			_ => (),
 		}
 
@@ -131,6 +183,17 @@ impl App {
 	fn update(&mut self, _args: &UpdateArgs) {
 		self.line_index = self.koch_lines.len().min(self.line_index + 1);
 	}
+}
+
+struct Line {
+	start: Vec2d,
+	direction: Vec2d,
+}
+
+struct Branch {
+	start: Vec2d,
+	end: Vec2d,
+	thickness: f64,
 }
 
 struct KochLine {
@@ -161,6 +224,10 @@ fn main() {
 	let gl = GlGraphics::new(opengl);
 
 	let base_koch_line = KochLine { start: [0.0, 0.0], end: [SHAPE_SIZE, 0.0] };
+
+	// Noise functions for randomly rotating vectors
+	let perlin = Perlin::new(4);
+	let rotate_noise = RotatePoint::new(perlin).set_z_angle(5.0);
 	
 	let mut app = App {
 		gl,
@@ -168,8 +235,11 @@ fn main() {
 		koch_lines: vec![base_koch_line],
 		line_index: 0,
 		triangles: Vec::new(),
+		rotate_noise,
+		branches: Vec::new(),
 	};
 
+	let size = window.ctx.window().inner_size();
 	// Generate fractals
 	match EXERCISE {
 		2 | 3 => {
@@ -178,6 +248,7 @@ fn main() {
 			}
 		},
 		5 => app.generate_sierpinski([START, [START[0] + SHAPE_SIZE, START[1]], [START[0] + SHAPE_SIZE / 2.0, START[1] - (PI / 3.0).tan() * SHAPE_SIZE / 2.0]], 0),
+		6 | 10 => app.generate_tree(Line {start: [size.width as f64 / 2.0, size.height as f64], direction: [0.0, -1.0]}, 200.0, 5.0),
 		_ => (),
 	}
 	
